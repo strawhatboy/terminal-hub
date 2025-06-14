@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TerminalHub</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1e1e1e;
+            color: #ffffff;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: #2d2d30;
+            padding: 1rem;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            color: #ffffff;
+            font-size: 1.5rem;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .container {
+            display: flex;
+            height: calc(100vh - 80px);
+        }
+        
+        .sidebar {
+            width: 300px;
+            background: #252526;
+            border-right: 1px solid #3e3e42;
+            overflow-y: auto;
+        }
+        
+        .client-list {
+            padding: 1rem;
+        }
+        
+        .client-item {
+            background: #37373d;
+            margin-bottom: 0.5rem;
+            padding: 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-left: 3px solid #007acc;
+        }
+        
+        .client-item:hover {
+            background: #2a2d2e;
+        }
+        
+        .client-item.active {
+            background: #094771;
+            border-left-color: #1f9cf0;
+        }
+        
+        .client-title {
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+        }
+        
+        .client-command {
+            font-size: 0.8rem;
+            color: #cccccc;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .client-status {
+            font-size: 0.75rem;
+            color: #4CAF50;
+            margin-top: 0.25rem;
+        }
+        
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .terminal-output {
+            flex: 1;
+            background: #0c0c0c;
+            color: #ffffff;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+            padding: 1rem;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            height: 100%;
+            transition: opacity 0.1s ease-in-out;
+        }
+        
+        .terminal-output.updating {
+            opacity: 0.9;
+        }
+        
+        /* ANSI Color Support - Improved for nvidia-smi and other tools */
+        .ansi-black { color: #000000; }
+        .ansi-red { color: #cd3131; }
+        .ansi-green { color: #0dbc79; }
+        .ansi-yellow { color: #e5e510; }
+        .ansi-blue { color: #2472c8; }
+        .ansi-magenta { color: #bc3fbc; }
+        .ansi-cyan { color: #11a8cd; }
+        .ansi-white { color: #e5e5e5; }
+        .ansi-bright-black { color: #666666; }
+        .ansi-bright-red { color: #f14c4c; }
+        .ansi-bright-green { color: #23d18b; }
+        .ansi-bright-yellow { color: #f5f543; }
+        .ansi-bright-blue { color: #3b8eea; }
+        .ansi-bright-magenta { color: #d670d6; }
+        .ansi-bright-cyan { color: #29b8db; }
+        .ansi-bright-white { color: #ffffff; }
+        
+        /* Background colors */
+        .ansi-bg-black { background-color: #000000; }
+        .ansi-bg-red { background-color: #cd3131; }
+        .ansi-bg-green { background-color: #0dbc79; }
+        .ansi-bg-yellow { background-color: #e5e510; }
+        .ansi-bg-blue { background-color: #2472c8; }
+        .ansi-bg-magenta { background-color: #bc3fbc; }
+        .ansi-bg-cyan { background-color: #11a8cd; }
+        .ansi-bg-white { background-color: #e5e5e5; }
+        
+        /* Text formatting */
+        .ansi-bold { font-weight: bold; }
+        .ansi-dim { opacity: 0.7; }
+        .ansi-italic { font-style: italic; }
+        .ansi-underline { text-decoration: underline; }
+        .ansi-blink { animation: blink 1s linear infinite; }
+        .ansi-reverse { background-color: #ffffff; color: #000000; }
+        .ansi-strikethrough { text-decoration: line-through; }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        
+        .no-clients {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            color: #cccccc;
+            text-align: center;
+        }
+        
+        .no-clients-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+        
+        .scrollbar {
+            scrollbar-width: thin;
+            scrollbar-color: #3e3e42 #252526;
+        }
+        
+        .scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .scrollbar::-webkit-scrollbar-track {
+            background: #252526;
+        }
+        
+        .scrollbar::-webkit-scrollbar-thumb {
+            background: #3e3e42;
+            border-radius: 4px;
+        }
+        
+        .scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #4e4e52;
+        }
+        
+        .terminal-output {
+            scrollbar-width: thin;
+            scrollbar-color: #3e3e42 #0c0c0c;
+        }
+        
+        .terminal-output::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .terminal-output::-webkit-scrollbar-track {
+            background: #0c0c0c;
+        }
+        
+        .terminal-output::-webkit-scrollbar-thumb {
+            background: #3e3e42;
+            border-radius: 4px;
+        }
+        
+        .update-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #4CAF50;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .update-indicator.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🖥️ TerminalHub</h1>
+        <div class="status">
+            <div class="status-dot"></div>
+            <span id="connection-status">Connected</span>
+            <span id="client-count">(0 clients)</span>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="sidebar scrollbar">
+            <div class="client-list">
+                <h3 style="margin-bottom: 1rem; color: #cccccc;">Connected Clients</h3>
+                <div id="clients-container">
+                    <!-- Clients will be populated here -->
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div id="no-clients" class="no-clients">
+                <div class="no-clients-icon">📺</div>
+                <h2>No Clients Connected</h2>
+                <p>Connect your first client with:<br><code>python client.py --cmd "nvidia-smi" --server server-ip:30080 --title "GPU Node 1" --interval 2</code></p>
+            </div>
+            
+            <div id="terminal-view" style="display: none; height: 100%; position: relative;">
+                <div class="terminal-output scrollbar" id="terminal-content"></div>
+                <div class="update-indicator" id="update-indicator">Updated</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let clients = {};
+        let currentClientId = null;
+        let autoScroll = true;
+        
+        const clientsContainer = document.getElementById('clients-container');
+        const terminalView = document.getElementById('terminal-view');
+        const noClientsView = document.getElementById('no-clients');
+        const terminalContent = document.getElementById('terminal-content');
+        const clientCount = document.getElementById('client-count');
+        const updateIndicator = document.getElementById('update-indicator');
+        
+        // Terminal Emulator Class - Handles all terminal escape sequences
+        class TerminalEmulator {
+            constructor(element) {
+                this.element = element;
+                this.buffer = [];
+                this.cursorRow = 0;
+                this.cursorCol = 0;
+                this.savedCursor = { row: 0, col: 0 };
+                this.scrollRegion = { top: 0, bottom: 23 }; // Default 24 lines
+                this.attributes = {
+                    bold: false,
+                    dim: false,
+                    italic: false,
+                    underline: false,
+                    blink: false,
+                    reverse: false,
+                    strikethrough: false,
+                    foreground: 'white',
+                    background: 'transparent'
+                };
+                this.defaultAttributes = { ...this.attributes };
+                this.initBuffer();
+            }
+            
+            initBuffer(rows = 40, cols = 180) {
+                this.rows = rows;
+                this.cols = cols;
+                this.buffer = [];
+                for (let i = 0; i < rows; i++) {
+                    this.buffer[i] = [];
+                    for (let j = 0; j < cols; j++) {
+                        this.buffer[i][j] = {
+                            char: ' ',
+                            attrs: { ...this.defaultAttributes }
+                        };
+                    }
+                }
+            }
+            
+            processText(text) {
+                const chars = [...text];
+                let i = 0;
+                
+                while (i < chars.length) {
+                    const char = chars[i];
+                    
+                    if (char === '\x1b') {
+                        // Handle escape sequences
+                        const sequence = this.parseEscapeSequence(chars, i);
+                        if (sequence) {
+                            this.handleEscapeSequence(sequence);
+                            i += sequence.length;
+                            continue;
+                        }
+                    }
+                    
+                    if (char === '\n') {
+                        this.newLine();
+                    } else if (char === '\r') {
+                        this.cursorCol = 0;
+                    } else if (char === '\t') {
+                        this.cursorCol = Math.min(this.cols - 1, (Math.floor(this.cursorCol / 8) + 1) * 8);
+                    } else if (char === '\b') {
+                        this.cursorCol = Math.max(0, this.cursorCol - 1);
+                    } else if (char.charCodeAt(0) >= 32) {
+                        // Printable character
+                        this.writeChar(char);
+                    }
+                    
+                    i++;
+                }
+                
+                this.render();
+            }
+            
+            parseEscapeSequence(chars, start) {
+                if (start + 1 >= chars.length) return null;
+                
+                let end = start + 1;
+                const secondChar = chars[end];
+                
+                if (secondChar === '[') {
+                    // CSI sequence
+                    end++;
+                    while (end < chars.length && 
+                           (chars[end].match(/[0-9;?]/) || 
+                            chars[end] === ' ' || 
+                            chars[end] === '"' || 
+                            chars[end] === "'" ||
+                            chars[end] === '!')) {
+                        end++;
+                    }
+                    if (end < chars.length) end++; // Include final character
+                } else if (secondChar === ']') {
+                    // OSC sequence
+                    end++;
+                    while (end < chars.length && chars[end] !== '\x07' && chars[end] !== '\x1b') {
+                        end++;
+                    }
+                    if (end < chars.length && chars[end] === '\x07') end++;
+                    if (end < chars.length && chars[end] === '\x1b' && end + 1 < chars.length && chars[end + 1] === '\\') {
+                        end += 2;
+                    }
+                } else if (secondChar.match(/[()]/)) {
+                    // Character set sequences: \x1b(B, \x1b)0, etc.
+                    end++;
+                    if (end < chars.length) end++; // Include the character set identifier
+                } else if (secondChar.match(/[78=>]/)) {
+                    // Single character sequences: \x1b7, \x1b8, \x1b=, \x1b>
+                    end++;
+                } else {
+                    // Other escape sequences
+                    end++;
+                }
+                
+                return {
+                    text: chars.slice(start, end).join(''),
+                    length: end - start
+                };
+            }
+            
+            handleEscapeSequence(sequence) {
+                const text = sequence.text;
+                
+                if (text.startsWith('\x1b[')) {
+                    // CSI sequence
+                    const match = text.match(/^\x1b\[([0-9;?]*)([A-Za-z])/);
+                    if (!match) return;
+                    
+                    const params = match[1] ? match[1].split(';').map(Number) : [];
+                    const command = match[2];
+                    
+                    this.handleCSI(command, params);
+                } else if (text.startsWith('\x1b]')) {
+                    // OSC sequence - ignore for now
+                    return;
+                } else if (text.match(/^\x1b[()][AB0-9]/)) {
+                    // Character set selection sequences - ignore these
+                    // Examples: \x1b(B (ASCII), \x1b)0 (special chars), etc.
+                    return;
+                } else if (text.match(/^\x1b[=>]/)) {
+                    // Application/numeric keypad mode - ignore
+                    return;
+                } else if (text.match(/^\x1b[78]/)) {
+                    // Save/restore cursor - alternative form
+                    if (text === '\x1b7') {
+                        this.savedCursor = { row: this.cursorRow, col: this.cursorCol };
+                    } else if (text === '\x1b8') {
+                        this.cursorRow = this.savedCursor.row;
+                        this.cursorCol = this.savedCursor.col;
+                    }
+                    return;
+                }
+            }
+            
+            handleCSI(command, params) {
+                switch (command) {
+                    case 'A': // Cursor up
+                        this.cursorRow = Math.max(0, this.cursorRow - (params[0] || 1));
+                        break;
+                    case 'B': // Cursor down
+                        this.cursorRow = Math.min(this.rows - 1, this.cursorRow + (params[0] || 1));
+                        break;
+                    case 'C': // Cursor right
+                        this.cursorCol = Math.min(this.cols - 1, this.cursorCol + (params[0] || 1));
+                        break;
+                    case 'D': // Cursor left
+                        this.cursorCol = Math.max(0, this.cursorCol - (params[0] || 1));
+                        break;
+                    case 'H': case 'f': // Cursor position
+                        this.cursorRow = Math.max(0, Math.min(this.rows - 1, (params[0] || 1) - 1));
+                        this.cursorCol = Math.max(0, Math.min(this.cols - 1, (params[1] || 1) - 1));
+                        break;
+                    case 'J': // Erase display
+                        this.eraseDisplay(params[0] || 0);
+                        break;
+                    case 'K': // Erase line
+                        this.eraseLine(params[0] || 0);
+                        break;
+                    case 'S': // Scroll up
+                        this.scrollUp(params[0] || 1);
+                        break;
+                    case 'T': // Scroll down
+                        this.scrollDown(params[0] || 1);
+                        break;
+                    case 's': // Save cursor
+                        this.savedCursor = { row: this.cursorRow, col: this.cursorCol };
+                        break;
+                    case 'u': // Restore cursor
+                        this.cursorRow = this.savedCursor.row;
+                        this.cursorCol = this.savedCursor.col;
+                        break;
+                    case 'm': // Set graphics mode
+                        this.setGraphicsMode(params);
+                        break;
+                    case 'r': // Set scroll region
+                        if (params.length >= 2) {
+                            this.scrollRegion.top = Math.max(0, (params[0] || 1) - 1);
+                            this.scrollRegion.bottom = Math.min(this.rows - 1, (params[1] || this.rows) - 1);
+                        }
+                        break;
+                }
+            }
+            
+            setGraphicsMode(params) {
+                if (params.length === 0) params = [0];
+                
+                for (let param of params) {
+                    switch (param) {
+                        case 0: // Reset
+                            this.attributes = { ...this.defaultAttributes };
+                            break;
+                        case 1: // Bold
+                            this.attributes.bold = true;
+                            break;
+                        case 2: // Dim
+                            this.attributes.dim = true;
+                            break;
+                        case 3: // Italic
+                            this.attributes.italic = true;
+                            break;
+                        case 4: // Underline
+                            this.attributes.underline = true;
+                            break;
+                        case 5: // Blink
+                            this.attributes.blink = true;
+                            break;
+                        case 7: // Reverse
+                            this.attributes.reverse = true;
+                            break;
+                        case 9: // Strikethrough
+                            this.attributes.strikethrough = true;
+                            break;
+                        case 22: // Normal intensity
+                            this.attributes.bold = false;
+                            this.attributes.dim = false;
+                            break;
+                        case 23: // Not italic
+                            this.attributes.italic = false;
+                            break;
+                        case 24: // Not underlined
+                            this.attributes.underline = false;
+                            break;
+                        case 25: // Not blinking
+                            this.attributes.blink = false;
+                            break;
+                        case 27: // Not reversed
+                            this.attributes.reverse = false;
+                            break;
+                        case 29: // Not strikethrough
+                            this.attributes.strikethrough = false;
+                            break;
+                        default:
+                            if (param >= 30 && param <= 37) {
+                                // Standard foreground colors
+                                const colors = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+                                this.attributes.foreground = colors[param - 30];
+                            } else if (param >= 90 && param <= 97) {
+                                // Bright foreground colors
+                                const colors = ['bright-black', 'bright-red', 'bright-green', 'bright-yellow', 'bright-blue', 'bright-magenta', 'bright-cyan', 'bright-white'];
+                                this.attributes.foreground = colors[param - 90];
+                            } else if (param >= 40 && param <= 47) {
+                                // Standard background colors
+                                const colors = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+                                this.attributes.background = colors[param - 40];
+                            }
+                            break;
+                    }
+                }
+            }
+            
+            writeChar(char) {
+                if (this.cursorRow >= this.rows) {
+                    this.scrollUp(1);
+                    this.cursorRow = this.rows - 1;
+                }
+                
+                if (this.cursorCol >= this.cols) {
+                    this.newLine();
+                }
+                
+                this.buffer[this.cursorRow][this.cursorCol] = {
+                    char: char,
+                    attrs: { ...this.attributes }
+                };
+                
+                this.cursorCol++;
+            }
+            
+            newLine() {
+                this.cursorCol = 0;
+                this.cursorRow++;
+                if (this.cursorRow >= this.rows) {
+                    this.scrollUp(1);
+                    this.cursorRow = this.rows - 1;
+                }
+            }
+            
+            eraseDisplay(mode) {
+                switch (mode) {
+                    case 0: // Erase from cursor to end of display
+                        this.eraseLine(0);
+                        for (let row = this.cursorRow + 1; row < this.rows; row++) {
+                            for (let col = 0; col < this.cols; col++) {
+                                this.buffer[row][col] = { char: ' ', attrs: { ...this.defaultAttributes } };
+                            }
+                        }
+                        break;
+                    case 1: // Erase from start of display to cursor
+                        for (let row = 0; row < this.cursorRow; row++) {
+                            for (let col = 0; col < this.cols; col++) {
+                                this.buffer[row][col] = { char: ' ', attrs: { ...this.defaultAttributes } };
+                            }
+                        }
+                        this.eraseLine(1);
+                        break;
+                    case 2: // Erase entire display
+                        this.initBuffer(this.rows, this.cols);
+                        this.cursorRow = 0;
+                        this.cursorCol = 0;
+                        break;
+                }
+            }
+            
+            eraseLine(mode) {
+                switch (mode) {
+                    case 0: // Erase from cursor to end of line
+                        for (let col = this.cursorCol; col < this.cols; col++) {
+                            this.buffer[this.cursorRow][col] = { char: ' ', attrs: { ...this.defaultAttributes } };
+                        }
+                        break;
+                    case 1: // Erase from start of line to cursor
+                        for (let col = 0; col <= this.cursorCol; col++) {
+                            this.buffer[this.cursorRow][col] = { char: ' ', attrs: { ...this.defaultAttributes } };
+                        }
+                        break;
+                    case 2: // Erase entire line
+                        for (let col = 0; col < this.cols; col++) {
+                            this.buffer[this.cursorRow][col] = { char: ' ', attrs: { ...this.defaultAttributes } };
+                        }
+                        break;
+                }
+            }
+            
+            scrollUp(lines) {
+                for (let i = 0; i < lines; i++) {
+                    // Remove top line and add blank line at bottom
+                    this.buffer.shift();
+                    const newLine = [];
+                    for (let col = 0; col < this.cols; col++) {
+                        newLine[col] = { char: ' ', attrs: { ...this.defaultAttributes } };
+                    }
+                    this.buffer.push(newLine);
+                }
+            }
+            
+            scrollDown(lines) {
+                for (let i = 0; i < lines; i++) {
+                    // Remove bottom line and add blank line at top
+                    this.buffer.pop();
+                    const newLine = [];
+                    for (let col = 0; col < this.cols; col++) {
+                        newLine[col] = { char: ' ', attrs: { ...this.defaultAttributes } };
+                    }
+                    this.buffer.unshift(newLine);
+                }
+            }
+            
+            render() {
+                let html = '';
+                
+                for (let row = 0; row < this.rows; row++) {
+                    let lineHtml = '';
+                    let currentSpan = null;
+                    let currentClasses = '';
+                    
+                    for (let col = 0; col < this.cols; col++) {
+                        const cell = this.buffer[row][col];
+                        const classes = this.getClassesForCell(cell);
+                        
+                        if (classes !== currentClasses) {
+                            if (currentSpan !== null) {
+                                lineHtml += '</span>';
+                            }
+                            if (classes) {
+                                lineHtml += `<span class="${classes}">`;
+                                currentSpan = true;
+                            } else {
+                                currentSpan = null;
+                            }
+                            currentClasses = classes;
+                        }
+                        
+                        const char = cell.char === ' ' ? '&nbsp;' : this.escapeHtml(cell.char);
+                        lineHtml += char;
+                    }
+                    
+                    if (currentSpan !== null) {
+                        lineHtml += '</span>';
+                    }
+                    
+                    // Remove trailing spaces from line
+                    lineHtml = lineHtml.replace(/(&nbsp;)+$/, '');
+                    html += lineHtml + '\n';
+                }
+                
+                this.element.innerHTML = html;
+            }
+            
+            getClassesForCell(cell) {
+                const classes = [];
+                const attrs = cell.attrs;
+                
+                if (attrs.bold) classes.push('ansi-bold');
+                if (attrs.dim) classes.push('ansi-dim');
+                if (attrs.italic) classes.push('ansi-italic');
+                if (attrs.underline) classes.push('ansi-underline');
+                if (attrs.blink) classes.push('ansi-blink');
+                if (attrs.reverse) classes.push('ansi-reverse');
+                if (attrs.strikethrough) classes.push('ansi-strikethrough');
+                
+                if (attrs.foreground && attrs.foreground !== 'white') {
+                    classes.push(`ansi-${attrs.foreground}`);
+                }
+                if (attrs.background && attrs.background !== 'transparent') {
+                    classes.push(`ansi-bg-${attrs.background}`);
+                }
+                
+                return classes.join(' ');
+            }
+            
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+            
+            clear() {
+                this.initBuffer(this.rows, this.cols);
+                this.cursorRow = 0;
+                this.cursorCol = 0;
+                this.render();
+            }
+        }
+        
+        // Global terminal emulator instance
+        let terminalEmulator = null;
+        
+        // Socket event handlers
+        socket.on('connect', function() {
+            document.getElementById('connection-status').textContent = 'Connected';
+            console.log('Connected to server');
+        });
+        
+        socket.on('disconnect', function() {
+            document.getElementById('connection-status').textContent = 'Disconnected';
+            console.log('Disconnected from server');
+        });
+        
+        socket.on('clients_list', function(data) {
+            clients = data.clients;
+            updateClientsList();
+            
+            // Load outputs for existing clients
+            if (data.outputs) {
+                Object.keys(data.outputs).forEach(clientId => {
+                    if (data.outputs[clientId]) {
+                        updateTerminalOutput(clientId, data.outputs[clientId], false, false);
+                    }
+                });
+            }
+        });
+        
+        socket.on('client_registered', function(data) {
+            clients[data.client_id] = {
+                title: data.title,
+                command: data.command,
+                connected_at: new Date().toISOString(),
+                last_update: new Date().toISOString()
+            };
+            updateClientsList();
+        });
+        
+        socket.on('client_disconnected', function(data) {
+            delete clients[data.client_id];
+            updateClientsList();
+            
+            if (currentClientId === data.client_id) {
+                currentClientId = null;
+                showNoClients();
+            }
+        });
+        
+        socket.on('output_update', function(data) {
+            if (data.client_id in clients) {
+                clients[data.client_id].last_update = data.timestamp;
+                updateTerminalOutput(data.client_id, data.output, true, data.clear_before);
+                updateClientsList(); // Update last seen time
+            }
+        });
+        
+        function updateClientsList() {
+            const clientIds = Object.keys(clients);
+            clientCount.textContent = `(${clientIds.length} clients)`;
+            
+            if (clientIds.length === 0) {
+                showNoClients();
+                clientsContainer.innerHTML = '<div style="color: #666; text-align: center; padding: 2rem;">No clients connected</div>';
+                return;
+            }
+            
+            clientsContainer.innerHTML = '';
+            
+            clientIds.forEach(clientId => {
+                const client = clients[clientId];
+                const clientDiv = document.createElement('div');
+                clientDiv.className = 'client-item';
+                if (clientId === currentClientId) {
+                    clientDiv.classList.add('active');
+                }
+                
+                const lastUpdate = new Date(client.last_update);
+                const timeDiff = Math.floor((new Date() - lastUpdate) / 1000);
+                const timeAgo = timeDiff < 60 ? `${timeDiff}s ago` : `${Math.floor(timeDiff / 60)}m ago`;
+                
+                clientDiv.innerHTML = `
+                    <div class="client-title">${client.title}</div>
+                    <div class="client-command">${client.command}</div>
+                    <div class="client-status">● Active • ${timeAgo}</div>
+                `;
+                
+                clientDiv.addEventListener('click', () => selectClient(clientId));
+                clientsContainer.appendChild(clientDiv);
+            });
+        }
+        
+        function selectClient(clientId) {
+            currentClientId = clientId;
+            updateClientsList();
+            
+            // Initialize terminal emulator for this client
+            if (!terminalEmulator) {
+                terminalEmulator = new TerminalEmulator(terminalContent);
+            } else {
+                terminalEmulator.clear();
+            }
+            
+            // Load current output for this client
+            fetch(`/api/output/${clientId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    try {
+                        if (data.output) {
+                            terminalEmulator.processText(data.output);
+                        } else {
+                            terminalContent.innerHTML = 'No output yet...';
+                        }
+                        scrollToBottom();
+                        showTerminal();
+                    } catch (parseError) {
+                        console.error('Error processing terminal output:', parseError);
+                        terminalContent.innerHTML = 'Error processing terminal output...';
+                        showTerminal();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error loading client output:', error);
+                    terminalContent.innerHTML = `Error loading output: ${error.message}`;
+                    showTerminal();
+                });
+        }
+        
+        function updateTerminalOutput(clientId, output, isNewOutput, clearBefore) {
+            if (currentClientId === clientId) {
+                try {
+                    // Initialize terminal emulator if not exists
+                    if (!terminalEmulator) {
+                        terminalEmulator = new TerminalEmulator(terminalContent);
+                    }
+                    
+                    // Check for clear indicators
+                    const shouldClear = clearBefore || output.includes("===");
+                    
+                    if (shouldClear && isNewOutput) {
+                        // Clear terminal and process new output
+                        terminalEmulator.clear();
+                        terminalEmulator.processText(output);
+                        
+                        // Show update indicator
+                        updateIndicator.classList.add('show');
+                        setTimeout(() => {
+                            updateIndicator.classList.remove('show');
+                        }, 1000);
+                    } else if (isNewOutput) {
+                        // Process incremental output
+                        terminalEmulator.processText(output);
+                        
+                        // Show update indicator
+                        updateIndicator.classList.add('show');
+                        setTimeout(() => {
+                            updateIndicator.classList.remove('show');
+                        }, 1000);
+                    } else {
+                        // Initial load - clear and process all output
+                        terminalEmulator.clear();
+                        terminalEmulator.processText(output);
+                    }
+                    
+                    if (autoScroll) {
+                        scrollToBottom();
+                    }
+                } catch (error) {
+                    console.error('Error processing terminal output:', error);
+                    terminalContent.innerHTML += '\n[Error processing output]';
+                }
+            }
+        }
+        
+        function showTerminal() {
+            noClientsView.style.display = 'none';
+            terminalView.style.display = 'flex';
+        }
+        
+        function showNoClients() {
+            terminalView.style.display = 'none';
+            noClientsView.style.display = 'flex';
+        }
+        
+        function scrollToBottom() {
+            terminalContent.scrollTop = terminalContent.scrollHeight;
+        }
+        
+        // Auto-scroll detection
+        terminalContent.addEventListener('scroll', function() {
+            const isAtBottom = terminalContent.scrollTop + terminalContent.clientHeight >= terminalContent.scrollHeight - 10;
+            autoScroll = isAtBottom;
+        });
+        
+        // Initialize
+        showNoClients();
+    </script>
+</body>
+</html>
