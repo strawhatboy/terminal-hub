@@ -19,38 +19,108 @@ class TerminalClient:
         self.client_id = str(uuid.uuid4())
         self.process = None
         self.running = True
+        self.registered = False
+        self.last_heartbeat = 0
+        self.heartbeat_interval = 30  # Send heartbeat every 30 seconds
+        self.max_retries = 3
+        self.retry_delay = 5  # Wait 5 seconds between retries
         
     def register_client(self):
-        """Register this client with the server"""
-        try:
-            response = requests.post(f"{self.server_url}/register", 
-                                   json={
-                                       "client_id": self.client_id,
-                                       "title": self.title,
-                                       "command": self.command
-                                   })
-            if response.status_code == 200:
-                print(f"✓ Registered with server: {self.title}")
-                return True
-            else:
-                print(f"✗ Failed to register with server: {response.text}")
-                return False
-        except Exception as e:
-            print(f"✗ Error connecting to server: {e}")
-            return False
+        """Register this client with the server with retry logic"""
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(f"{self.server_url}/register", 
+                                       json={
+                                           "client_id": self.client_id,
+                                           "title": self.title,
+                                           "command": self.command
+                                       }, timeout=10)
+                if response.status_code == 200:
+                    print(f"✓ Registered with server: {self.title}")
+                    self.registered = True
+                    self.last_heartbeat = time.time()
+                    return True
+                else:
+                    print(f"✗ Failed to register with server: {response.text}")
+            except Exception as e:
+                print(f"✗ Error connecting to server (attempt {attempt + 1}/{self.max_retries}): {e}")
+                if attempt < self.max_retries - 1:
+                    print(f"⏳ Retrying in {self.retry_delay} seconds...")
+                    time.sleep(self.retry_delay)
+        
+        self.registered = False
+        return False
     
     def send_output(self, output, clear_before=False):
-        """Send command output to the server"""
+        """Send command output to the server with auto-reconnection"""
+        # Ensure we're registered before sending output
+        if not self.ensure_registered():
+            print("❌ Could not register with server, output not sent")
+            return False
+            
         try:
-            requests.post(f"{self.server_url}/update", 
+            response = requests.post(f"{self.server_url}/update", 
                          json={
                              "client_id": self.client_id,
                              "output": output,
                              "timestamp": datetime.now().isoformat(),
                              "clear_before": clear_before
-                         })
+                         }, timeout=10)
+            
+            if response.status_code == 404:
+                # Server doesn't know about us - re-register and retry
+                print("⚠️  Server lost our registration, re-registering...")
+                self.registered = False
+                if self.ensure_registered():
+                    return self.send_output(output, clear_before)  # Retry once
+            elif response.status_code == 200:
+                return True
+            else:
+                print(f"⚠️  Failed to send output: {response.status_code}")
+                return False
+                
         except Exception as e:
-            print(f"Error sending output: {e}")
+            print(f"❌ Error sending output: {e}")
+            return False
+    
+    def send_heartbeat(self):
+        """Send heartbeat to server to maintain registration"""
+        try:
+            response = requests.post(f"{self.server_url}/heartbeat", 
+                                   json={
+                                       "client_id": self.client_id,
+                                       "timestamp": datetime.now().isoformat()
+                                   }, timeout=5)
+            if response.status_code == 200:
+                self.last_heartbeat = time.time()
+                return True
+            elif response.status_code == 404:
+                # Server doesn't know about us - need to re-register
+                print("⚠️  Server doesn't recognize client, re-registering...")
+                self.registered = False
+                return False
+            else:
+                print(f"⚠️  Heartbeat failed: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"⚠️  Heartbeat error: {e}")
+            return False
+    
+    def ensure_registered(self):
+        """Ensure client is registered, re-register if necessary"""
+        current_time = time.time()
+        
+        # Check if we need to send heartbeat
+        if current_time - self.last_heartbeat > self.heartbeat_interval:
+            if not self.send_heartbeat():
+                self.registered = False
+        
+        # Re-register if needed
+        if not self.registered:
+            print("🔄 Re-registering with server...")
+            return self.register_client()
+        
+        return True
     
     def run_command(self):
         """Run the command and capture its output"""
@@ -187,7 +257,7 @@ class TerminalClient:
         env.update({
             'TERM': 'xterm',
             'COLUMNS': '180',
-            'LINES': '40',
+            'LINES': '50',
             'DEBIAN_FRONTEND': 'noninteractive',
             'NVIDIA_SMI_OPTS': '--format=csv,noheader,nounits'
         })
@@ -222,6 +292,31 @@ class TerminalClient:
         except:
             pass
         print("\n✓ Client disconnected cleanly")
+    
+    def reconnect(self):
+        """Attempt to reconnect to the server"""
+        for attempt in range(self.max_retries):
+            try:
+                print(f"Attempting to reconnect to server (Attempt {attempt + 1}/{self.max_retries})...")
+                response = requests.post(f"{self.server_url}/register", 
+                                       json={
+                                           "client_id": self.client_id,
+                                           "title": self.title,
+                                           "command": self.command
+                                       })
+                if response.status_code == 200:
+                    print("✓ Reconnected to server")
+                    self.registered = True
+                    return True
+                else:
+                    print(f"✗ Failed to reconnect: {response.text}")
+            except Exception as e:
+                print(f"✗ Error connecting to server: {e}")
+            
+            time.sleep(self.retry_delay)
+        
+        print("✗ Max reconnection attempts reached. Giving up.")
+        return False
 
 def signal_handler(signum, frame):
     """Handle Ctrl+C gracefully"""
@@ -262,7 +357,8 @@ def main():
     
     # Register with server
     if not client.register_client():
-        sys.exit(1)
+        print("❌ Failed to register with server. Will retry during operation...")
+        # Don't exit - we'll keep trying to register during operation
     
     # Start running the command
     try:

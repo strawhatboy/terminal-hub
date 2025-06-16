@@ -1,8 +1,9 @@
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
+import time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
@@ -11,6 +12,38 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 # Store client data
 clients = {}
 client_outputs = {}
+
+def cleanup_stale_clients():
+    """Remove clients that haven't sent heartbeat in a while"""
+    while True:
+        try:
+            current_time = datetime.now()
+            stale_threshold = timedelta(minutes=5)  # Remove clients inactive for 5+ minutes
+            
+            stale_clients = []
+            for client_id, client_info in clients.items():
+                last_heartbeat = datetime.fromisoformat(client_info.get('last_heartbeat', client_info.get('connected_at')))
+                if current_time - last_heartbeat > stale_threshold:
+                    stale_clients.append(client_id)
+            
+            for client_id in stale_clients:
+                title = clients[client_id]['title']
+                print(f"🧹 Removing stale client: {title} (no heartbeat for >5 min)")
+                del clients[client_id]
+                if client_id in client_outputs:
+                    del client_outputs[client_id]
+                
+                # Notify web clients
+                socketio.emit('client_disconnected', {'client_id': client_id})
+                
+        except Exception as e:
+            print(f"Error in cleanup task: {e}")
+        
+        time.sleep(60)  # Check every minute
+
+# Start cleanup task in background
+cleanup_thread = threading.Thread(target=cleanup_stale_clients, daemon=True)
+cleanup_thread.start()
 
 @app.route('/')
 def index():
@@ -35,7 +68,8 @@ def register_client():
         'title': title,
         'command': command,
         'connected_at': datetime.now().isoformat(),
-        'last_update': datetime.now().isoformat()
+        'last_update': datetime.now().isoformat(),
+        'last_heartbeat': datetime.now().isoformat()
     }
     
     client_outputs[client_id] = ""
@@ -49,6 +83,28 @@ def register_client():
     
     print(f"✓ Client registered: {title} ({command})")
     return jsonify({'status': 'registered'})
+
+@app.route('/heartbeat', methods=['POST'])
+def heartbeat():
+    """Handle client heartbeat to maintain registration"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No JSON data provided'}), 400
+        
+    client_id = data.get('client_id')
+    timestamp = data.get('timestamp')
+    
+    if not client_id:
+        return jsonify({'error': 'Missing client_id'}), 400
+    
+    if client_id not in clients:
+        # Client not registered
+        return jsonify({'error': 'Client not registered', 'action': 'register'}), 404
+    
+    # Update last heartbeat time
+    clients[client_id]['last_heartbeat'] = timestamp or datetime.now().isoformat()
+    
+    return jsonify({'status': 'heartbeat_received'})
 
 @app.route('/update', methods=['POST'])
 def update_output():
